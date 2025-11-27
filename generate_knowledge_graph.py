@@ -2,7 +2,7 @@ from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from pyvis.network import Network
-
+from neo4j import GraphDatabase
 from dotenv import load_dotenv
 import os
 import asyncio
@@ -12,6 +12,10 @@ import asyncio
 load_dotenv()
 # Get API key from environment variable
 api_key = os.getenv("OPENAI_API_KEY")
+# Get Neo4j connection details from environment variables
+neo4j_uri = os.getenv("NEO4J_URI")
+neo4j_user = os.getenv("NEO4J_USER")
+neo4j_password = os.getenv("NEO4J_PASSWORD")
 
 llm = ChatOpenAI(temperature=0, model_name="gpt-4o")
 
@@ -32,6 +36,46 @@ async def extract_graph_data(text):
     documents = [Document(page_content=text)]
     graph_documents = await graph_transformer.aconvert_to_graph_documents(documents)
     return graph_documents
+
+
+def _prepare_properties(properties):
+    """
+    Sanitizes properties to be stored in Neo4j.
+    Removes complex objects and keeps only primitive types.
+    """
+    sanitized = {}
+    for key, value in properties.items():
+        if isinstance(value, (str, int, float, bool)):
+            sanitized[key] = value
+    return sanitized
+
+def persist_graph(graph_documents):
+    """
+    Persists the generated graph to a Neo4j database.
+
+    Args:
+        graph_documents (list): A list of GraphDocument objects with nodes and relationships.
+    """
+    driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+
+    with driver.session() as session:
+        for doc in graph_documents:
+            # Create nodes
+            for node in doc.nodes:
+                properties = _prepare_properties(vars(node))
+                session.run("MERGE (n:%s {id: $id}) SET n += $properties" % node.type, id=node.id, properties=properties)
+
+            # Create relationships
+            for rel in doc.relationships:
+                properties = _prepare_properties(vars(rel))
+                session.run(
+                    "MATCH (a:%s {id: $source_id}), (b:%s {id: $target_id}) "
+                    "MERGE (a)-[r:%s]->(b) SET r += $properties" % (rel.source.type, rel.target.type, rel.type),
+                    source_id=rel.source.id,
+                    target_id=rel.target.id,
+                    properties=properties
+                )
+    driver.close()
 
 
 def visualize_graph(graph_documents):
@@ -123,5 +167,6 @@ def generate_knowledge_graph(text):
         pyvis.network.Network: The visualized network graph object.
     """
     graph_documents = asyncio.run(extract_graph_data(text))
+    persist_graph(graph_documents)
     net = visualize_graph(graph_documents)
     return net

@@ -35,7 +35,7 @@ if input_method == "Upload txt":
             with st.spinner("Generating knowledge graph..."):
                 # Call the function to generate the graph from the text
                 net = generate_knowledge_graph(text)
-                st.success("Knowledge graph generated successfully!")
+                st.success("Knowledge graph generated and saved successfully!")
                 
                 # Save the graph to an HTML file
                 output_file = "knowledge_graph.html"
@@ -55,7 +55,7 @@ else:
             with st.spinner("Generating knowledge graph..."):
                 # Call the function to generate the graph from the input text
                 net = generate_knowledge_graph(text)
-                st.success("Knowledge graph generated successfully!")
+                st.success("Knowledge graph generated and persisted successfully!")
                 
                 # Save the graph to an HTML file
                 output_file = "knowledge_graph.html"
