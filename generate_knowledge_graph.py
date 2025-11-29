@@ -1,12 +1,14 @@
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_core.documents import Document
+from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
 from langchain_openai import ChatOpenAI
 from pyvis.network import Network
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 import os
 import asyncio
-
+import uuid
+import json
 
 # Load the .env file
 load_dotenv()
@@ -49,12 +51,13 @@ def _prepare_properties(properties):
             sanitized[key] = value
     return sanitized
 
-def persist_graph(graph_documents):
+def persist_graph(graph_documents, graph_id):
     """
     Persists the generated graph to a Neo4j database.
 
     Args:
         graph_documents (list): A list of GraphDocument objects with nodes and relationships.
+        graph_id (str): The unique ID for the graph.
     """
     driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
 
@@ -63,19 +66,92 @@ def persist_graph(graph_documents):
             # Create nodes
             for node in doc.nodes:
                 properties = _prepare_properties(vars(node))
-                session.run("MERGE (n:%s {id: $id}) SET n += $properties" % node.type, id=node.id, properties=properties)
+                properties['graph_id'] = graph_id
+                session.run("MERGE (n:`%s` {id: $id}) SET n += $properties" % node.type, id=node.id, properties=properties)
 
             # Create relationships
             for rel in doc.relationships:
                 properties = _prepare_properties(vars(rel))
+                properties['graph_id'] = graph_id
                 session.run(
-                    "MATCH (a:%s {id: $source_id}), (b:%s {id: $target_id}) "
-                    "MERGE (a)-[r:%s]->(b) SET r += $properties" % (rel.source.type, rel.target.type, rel.type),
+                    "MATCH (a:`%s` {id: $source_id}), (b:`%s` {id: $target_id}) "
+                    "MERGE (a)-[r:`%s`]->(b) SET r += $properties" % (rel.source.type, rel.target.type, rel.type),
                     source_id=rel.source.id,
                     target_id=rel.target.id,
                     properties=properties
                 )
     driver.close()
+
+
+def _convert_to_graph_document(nodes_data, relationships_data):
+    """Converts lists of nodes and relationships into a GraphDocument."""
+    # Create Node objects
+    node_objects = [Node(id=n['id'], type=n['type']) for n in nodes_data]
+    
+    # Create a lookup for node objects by id
+    node_lookup = {node.id: node for node in node_objects}
+
+    # Create Relationship objects
+    relationship_objects = []
+    for r in relationships_data:
+        source_node = node_lookup.get(r['source'])
+        target_node = node_lookup.get(r['target'])
+        if source_node and target_node:
+            relationship_objects.append(Relationship(
+                source=source_node,
+                target=target_node,
+                type=r['type']
+            ))
+
+    # Create a dummy source document
+    source_doc = Document(page_content="Loaded from database")
+
+    # Create a GraphDocument
+    return [GraphDocument(nodes=node_objects, relationships=relationship_objects, source=source_doc)]
+
+
+def load_graph_from_db(graph_id):
+    """
+    Loads a graph from the Neo4j database and visualizes it.
+
+    Args:
+        graph_id (str): The unique ID of the graph to load.
+
+    Returns:
+        pyvis.network.Network: The visualized network graph object.
+    """
+    driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+    nodes, relationships = [], []
+    with driver.session() as session:
+        # Query for all nodes and relationships with the given graph_id
+        result = session.run("MATCH (n {graph_id: $graph_id}) "
+                             "OPTIONAL MATCH (n)-[r {graph_id: $graph_id}]->(m) "
+                             "RETURN n, r, m", graph_id=graph_id)
+        
+        processed_nodes = set()
+        for record in result:
+            node1 = record["n"]
+            rel = record["r"]
+            node2 = record["m"]
+
+            if node1 and node1.id not in processed_nodes:
+                nodes.append({"id": node1["id"], "type": list(node1.labels)[0], "properties": dict(node1)})
+                processed_nodes.add(node1.id)
+
+            if node2 and node2.id not in processed_nodes:
+                nodes.append({"id": node2["id"], "type": list(node2.labels)[0], "properties": dict(node2)})
+                processed_nodes.add(node2.id)
+            
+            if rel:
+                relationships.append({"source": rel.start_node["id"], "target": rel.end_node["id"], "type": rel.type, "properties": dict(rel)})
+
+    driver.close()
+    # Remove duplicate relationships
+    unique_relationships_str = {json.dumps(d, sort_keys=True) for d in relationships}
+    unique_relationships = [json.loads(s) for s in unique_relationships_str]
+    
+    graph_documents = _convert_to_graph_document(nodes, unique_relationships)
+    return visualize_graph(graph_documents)
 
 
 def visualize_graph(graph_documents):
@@ -153,7 +229,7 @@ def visualize_graph(graph_documents):
         return None
 
 
-def generate_knowledge_graph(text):
+def generate_knowledge_graph(text, graph_id):
     """
     Generates and visualizes a knowledge graph from input text.
 
@@ -162,11 +238,12 @@ def generate_knowledge_graph(text):
 
     Args:
         text (str): Input text to convert into a knowledge graph.
+        graph_id (str): The unique ID for the graph.
 
     Returns:
         pyvis.network.Network: The visualized network graph object.
     """
     graph_documents = asyncio.run(extract_graph_data(text))
-    persist_graph(graph_documents)
+    persist_graph(graph_documents, graph_id)
     net = visualize_graph(graph_documents)
     return net
