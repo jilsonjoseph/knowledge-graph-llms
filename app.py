@@ -1,7 +1,7 @@
 # Import necessary modules
 import streamlit as st
 import streamlit.components.v1 as components
-from generate_knowledge_graph import generate_knowledge_graph, load_graph_from_db
+from generate_knowledge_graph import generate_knowledge_graph, load_graph_from_db, get_all_graphs
 import uuid
 
 # Set up Streamlit page configuration
@@ -12,13 +12,16 @@ st.set_page_config(
     menu_items=None
 )
 
-# Initialize session state if it doesn't exist
-if "history" not in st.session_state:
-    st.session_state.history = []
+# Initialize session state (history is now managed via the database)
 if "net" not in st.session_state:
     st.session_state.net = None
 if "current_graph_id" not in st.session_state:
     st.session_state.current_graph_id = None
+
+# Function to load all graphs from DB, cached by Streamlit for performance
+@st.cache_data
+def load_all_graphs_from_db():
+    return get_all_graphs()
 
 # Set the title of the app
 st.title("Knowledge Graph From Text")
@@ -42,13 +45,16 @@ else:
 
 generate_button_clicked = st.sidebar.button("Generate Knowledge Graph")
 
+# --- History UI, now powered by the database ---
+all_graphs = load_all_graphs_from_db()
+
 st.sidebar.title("History")
 clicked_history_item = None
-if not st.session_state.history:
-    st.sidebar.write("No past entries yet.")
+if not all_graphs:
+    st.sidebar.write("No saved graphs yet.")
 else:
     # Create a clickable button for each history item
-    for item in st.session_state.history:
+    for item in all_graphs:
         if st.sidebar.button(item["name"], key=f"history_btn_{item['graph_id']}"):
             clicked_history_item = item
 
@@ -64,12 +70,13 @@ if generate_button_clicked:
     else:
         with st.spinner("Generating knowledge graph..."):
             graph_id = str(uuid.uuid4())
-            # Generate the new graph and update the session state
-            st.session_state.net = generate_knowledge_graph(text, graph_id)
+            # Pass graph_name to the generation function
+            st.session_state.net = generate_knowledge_graph(text, graph_id, graph_name)
             st.session_state.current_graph_id = graph_id
-            # Add the new graph to the history
-            st.session_state.history.append({"graph_id": graph_id, "name": graph_name, "text": text})
             st.success("Knowledge graph generated and persisted successfully!")
+            # Clear cache and rerun to refresh the history list from the DB
+            st.cache_data.clear()
+            st.rerun()
 
 # Priority 2: User clicks a history item button.
 elif clicked_history_item:
@@ -78,6 +85,8 @@ elif clicked_history_item:
         with st.spinner(f"Loading '{clicked_history_item['name']}'..."):
             st.session_state.net = load_graph_from_db(clicked_history_item["graph_id"])
             st.session_state.current_graph_id = clicked_history_item["graph_id"]
+            # Rerun to ensure the main panel updates correctly
+            st.rerun()
 
 # --- Main Panel for Displaying the Graph ---
 # This section simply renders whatever graph is currently in the session state.
