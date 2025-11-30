@@ -43,12 +43,14 @@ else:
 generate_button_clicked = st.sidebar.button("Generate Knowledge Graph")
 
 st.sidebar.title("History")
+clicked_history_item = None
 if not st.session_state.history:
     st.sidebar.write("No past entries yet.")
-    selected_graph_name = None
 else:
-    history_names = [item["name"] for item in st.session_state.history]
-    selected_graph_name = st.sidebar.selectbox("Select a past entry:", history_names)
+    # Create a clickable button for each history item
+    for item in st.session_state.history:
+        if st.sidebar.button(item["name"], key=f"history_btn_{item['graph_id']}"):
+            clicked_history_item = item
 
 
 # --- Action Handling Logic ---
@@ -69,17 +71,13 @@ if generate_button_clicked:
             st.session_state.history.append({"graph_id": graph_id, "name": graph_name, "text": text})
             st.success("Knowledge graph generated and persisted successfully!")
 
-# Priority 2: User selects a different graph from history.
-# This runs only if the 'Generate' button was not clicked.
-elif selected_graph_name:
-    selected_graph = next((item for item in st.session_state.history if item["name"] == selected_graph_name), None)
-    
-    # Only reload from the database if the selected graph is not already the one being displayed
-    if selected_graph and selected_graph["graph_id"] != st.session_state.current_graph_id:
-        with st.spinner(f"Loading '{selected_graph_name}'..."):
-            # Load the selected graph and update the session state
-            st.session_state.net = load_graph_from_db(selected_graph["graph_id"])
-            st.session_state.current_graph_id = selected_graph["graph_id"]
+# Priority 2: User clicks a history item button.
+elif clicked_history_item:
+    # Only reload if the selected graph is not already the one being displayed
+    if clicked_history_item["graph_id"] != st.session_state.current_graph_id:
+        with st.spinner(f"Loading '{clicked_history_item['name']}'..."):
+            st.session_state.net = load_graph_from_db(clicked_history_item["graph_id"])
+            st.session_state.current_graph_id = clicked_history_item["graph_id"]
 
 # --- Main Panel for Displaying the Graph ---
 # This section simply renders whatever graph is currently in the session state.
