@@ -12,97 +12,83 @@ st.set_page_config(
     menu_items=None
 )
 
-# Initialize session state for history if it doesn't exist
+# Initialize session state if it doesn't exist
 if "history" not in st.session_state:
     st.session_state.history = []
+if "net" not in st.session_state:
+    st.session_state.net = None
+if "current_graph_id" not in st.session_state:
+    st.session_state.current_graph_id = None
 
 # Set the title of the app
 st.title("Knowledge Graph From Text")
 
-# Sidebar section for user input method
+# --- Sidebar UI Elements ---
 st.sidebar.title("Input document")
 input_method = st.sidebar.radio(
     "Choose an input method:",
     ["Upload txt", "Input text"],
 )
 
-# Text input for naming the graph
 graph_name = st.sidebar.text_input("Enter a name for the graph:")
 
-# Case 1: User chooses to upload a .txt file
+text = None
 if input_method == "Upload txt":
-    # File uploader widget in the sidebar
     uploaded_file = st.sidebar.file_uploader(label="Upload file", type=["txt"])
-    
     if uploaded_file is not None:
-        # Read the uploaded file content and decode it as UTF-8 text
         text = uploaded_file.read().decode("utf-8")
- 
-        # Button to generate the knowledge graph
-        if st.sidebar.button("Generate Knowledge Graph"):
-            if not graph_name:
-                st.sidebar.warning("Please enter a name for the graph.")
-            else:
-                with st.spinner("Generating knowledge graph..."):
-                    graph_id = str(uuid.uuid4())
-                    # Call the function to generate the graph from the text
-                    net = generate_knowledge_graph(text, graph_id)
-                    st.session_state.history.append({"graph_id": graph_id, "name": graph_name, "text": text})
-                    st.success("Knowledge graph generated and persisted successfully!")
-                    
-                    # Save the graph to an HTML file
-                    output_file = "knowledge_graph.html"
-                    net.save_graph(output_file) 
-
-                    # Open the HTML file and display it within the Streamlit app
-                    HtmlFile = open(output_file, 'r', encoding='utf-8')
-                    components.html(HtmlFile.read(), height=1000)
-
-# Case 2: User chooses to directly input text
 else:
-    # Text area for manual input
     text = st.sidebar.text_area("Input text", height=300)
 
-    if text:  # Check if the text area is not empty
-        if st.sidebar.button("Generate Knowledge Graph"):
-            if not graph_name:
-                st.sidebar.warning("Please enter a name for the graph.")
-            else:
-                with st.spinner("Generating knowledge graph..."):
-                    graph_id = str(uuid.uuid4())
-                    # Call the function to generate the graph from the input text
-                    net = generate_knowledge_graph(text, graph_id)
-                    st.session_state.history.append({"graph_id": graph_id, "name": graph_name, "text": text})
-                    st.success("Knowledge graph generated and persisted successfully!")
-                    
-                    # Save the graph to an HTML file
-                    output_file = "knowledge_graph.html"
-                    net.save_graph(output_file) 
+generate_button_clicked = st.sidebar.button("Generate Knowledge Graph")
 
-                    # Open the HTML file and display it within the Streamlit app
-                    HtmlFile = open(output_file, 'r', encoding='utf-8')
-                    components.html(HtmlFile.read(), height=1000)
-
-# History section in the sidebar
 st.sidebar.title("History")
 if not st.session_state.history:
     st.sidebar.write("No past entries yet.")
+    selected_graph_name = None
 else:
-    # Create a list of graph names for the selectbox
     history_names = [item["name"] for item in st.session_state.history]
     selected_graph_name = st.sidebar.selectbox("Select a past entry:", history_names)
 
-    if selected_graph_name:
-        # Find the selected graph's data from the history
-        selected_graph = next((item for item in st.session_state.history if item["name"] == selected_graph_name), None)
-        if selected_graph:
-            with st.spinner(f"Loading '{selected_graph_name}'..."):
-                # Regenerate the graph from the database using its ID
-                net = load_graph_from_db(selected_graph["graph_id"])
-                
-                output_file = "knowledge_graph.html"
-                net.save_graph(output_file)
 
-                HtmlFile = open(output_file, 'r', encoding='utf-8')
-                components.html(HtmlFile.read(), height=1000)
+# --- Action Handling Logic ---
 
+# Priority 1: User clicks the 'Generate' button.
+if generate_button_clicked:
+    if not text:
+        st.sidebar.warning("Please provide text to generate a graph.")
+    elif not graph_name:
+        st.sidebar.warning("Please enter a name for the graph.")
+    else:
+        with st.spinner("Generating knowledge graph..."):
+            graph_id = str(uuid.uuid4())
+            # Generate the new graph and update the session state
+            st.session_state.net = generate_knowledge_graph(text, graph_id)
+            st.session_state.current_graph_id = graph_id
+            # Add the new graph to the history
+            st.session_state.history.append({"graph_id": graph_id, "name": graph_name, "text": text})
+            st.success("Knowledge graph generated and persisted successfully!")
+
+# Priority 2: User selects a different graph from history.
+# This runs only if the 'Generate' button was not clicked.
+elif selected_graph_name:
+    selected_graph = next((item for item in st.session_state.history if item["name"] == selected_graph_name), None)
+    
+    # Only reload from the database if the selected graph is not already the one being displayed
+    if selected_graph and selected_graph["graph_id"] != st.session_state.current_graph_id:
+        with st.spinner(f"Loading '{selected_graph_name}'..."):
+            # Load the selected graph and update the session state
+            st.session_state.net = load_graph_from_db(selected_graph["graph_id"])
+            st.session_state.current_graph_id = selected_graph["graph_id"]
+
+# --- Main Panel for Displaying the Graph ---
+# This section simply renders whatever graph is currently in the session state.
+if st.session_state.net:
+    output_file = "knowledge_graph.html"
+    st.session_state.net.save_graph(output_file) 
+
+    with open(output_file, 'r', encoding='utf-8') as HtmlFile:
+        source_code = HtmlFile.read()
+        components.html(source_code, height=1000)
+else:
+    st.info("Generate a new graph or select one from history to display it here.")
